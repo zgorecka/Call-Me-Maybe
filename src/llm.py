@@ -1,6 +1,78 @@
 from llm_sdk import Small_LLM_Model
 import numpy as np
 
+func = [
+  {
+    "name": "fn_add_numbers",
+    "description": "Add two numbers together and return their sum.",
+    "parameters": {
+      "a": {
+        "type": "number"
+      },
+      "b": {
+        "type": "number"
+      }
+    },
+    "returns": {
+      "type": "number"
+    }
+  },
+  {
+    "name": "fn_greet",
+    "description": "Generate a greeting message for a person by name.",
+    "parameters": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "fn_reverse_string",
+    "description": "Reverse a string and return the reversed result.",
+    "parameters": {
+      "s": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "fn_get_square_root",
+    "description": "Calculate the square root of a number.",
+    "parameters": {
+      "a": {
+        "type": "number"
+      }
+    },
+    "returns": {
+      "type": "number"
+    }
+  },
+  {
+    "name": "fn_substitute_string_with_regex",
+    "description": "Replace all occurrences matching a regex pattern in a string.",
+    "parameters": {
+      "source_string": {
+        "type": "string"
+      },
+      "regex": {
+        "type": "string"
+      },
+      "replacement": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  }
+]
+
 selection_prompt = (
     "<|im_start|>system\n"
     "Select the function that best matches the user request. "
@@ -19,46 +91,55 @@ selection_prompt = (
     "<|im_start|>assistant\n"
 )
 
-def prep_funtion_names(functions: list) -> list:
+
+def select_function(model: Small_LLM_Model, functions: list, selection_prompt: str) -> str:
     names = []
     for function in functions:
         names.append(function["name"])
-    
-    return names
-
-def select_function(model: Small_LLM_Model, names: list, selection_prompt: str) -> None:
     function_token_ids = []
     for name in names:
         function_token_ids.append(model.encode(name).tolist()[0])
-    print(function_token_ids)
 
     input_ids = model.encode(selection_prompt).tolist()[0]
 
-    
+    generated_ids = []
+    while True:
+        if generated_ids in function_token_ids:
+            break
+        maching_seq = []
+        for seq in function_token_ids:
+            if generated_ids == seq[:len(generated_ids)]:
+                maching_seq.append(seq)
 
-def initModel() -> None:
-    prompt = "What is the sum of 2 and 3?"
-    model = Small_LLM_Model()
-    encoded = model.encode(selection_prompt)
-    print(encoded.shape)
-    print(encoded.tolist())
-    input_ids = encoded.tolist()[0]
-    logits = model.get_logits_from_input_ids(input_ids)
-    logits_array = np.asarray(logits)
-    print(logits_array.shape)
-    next_token_id = int(np.argmax(logits))
-    print("Token ID:", next_token_id)
-    print("Logit:", logits[next_token_id])
-    token_text = model.decode([next_token_id])
-    print("Token:", token_text)
-    for i in range(100):
-        input_ids.append(next_token_id)
-        logits = model.get_logits_from_input_ids(input_ids)
-        next_token_id = int(np.argmax(logits))
-        token_text = model.decode([next_token_id])
-        print("Token:", token_text)
+        next_token_id = model.get_logits_from_input_ids(input_ids + generated_ids)
+
+        mask = np.full_like(
+            np.asarray(next_token_id),
+            -np.inf,
+            dtype=float,
+        )
+
+        pos = len(generated_ids)
+
+        allowed_ids =[]
+
+        for seq in maching_seq:
+            allowed_ids.append(seq[pos])
+
+        for id in allowed_ids:
+            mask[id] = next_token_id[id]
+
+        next_token = np.argmax(mask)
+        generated_ids.append(next_token)
+    
+    result = ""
+    for id in generated_ids:
+        result += model.decode(id)
+
+    return result
+
 
 if __name__ == "__main__":
     model = Small_LLM_Model()
 
-    select_function(model, ['fn_add_numbers', 'fn_greet', 'fn_reverse_string', 'fn_get_square_root', 'fn_substitute_string_with_regex'])
+    #select_function(model, func, selection_prompt)
