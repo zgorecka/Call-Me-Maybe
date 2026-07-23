@@ -1,7 +1,7 @@
 from src.file_loader import load_function_def, load_prompt
 from pathlib import Path
 import argparse
-from src.llm import select_function
+from src.llm import select_function, build_selection_prompt
 from llm_sdk import Small_LLM_Model
 
 selection_prompt = (
@@ -22,6 +22,7 @@ selection_prompt = (
     "<|im_start|>assistant\n"
 )
 
+
 def parse_arguments() -> argparse.Namespace:
     pass
 
@@ -30,6 +31,7 @@ def main() -> None:
     fun = load_function_def(path)
     path = Path('data/input/function_calling_tests.json')
     model = Small_LLM_Model()
+    print(fun)
     selected_func = select_function(model, fun, selection_prompt)
     print(selected_func)
 

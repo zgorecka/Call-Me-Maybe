@@ -91,6 +91,34 @@ selection_prompt = (
     "<|im_start|>assistant\n"
 )
 
+def build_selection_prompt(functions: list, user_prompt: str) -> str:
+    lines = [
+        "<|im_start|>system",
+        "Select the function that best matches the user request.",
+        "Return only the exact function name.",
+        "Do not explain your choice.",
+        "",
+        "Available functions:",
+    ]
+
+    for function in functions:
+        lines.append("")
+        lines.append(f"Name: {function['name']}")
+        lines.append(f"Description: {function['description']}")
+        lines.append("Parameters:")
+
+        for param_name, param_data in function["parameters"].items():
+            lines.append(
+                f"- {parame_name}: {param_data["type"]}"
+            )
+        lines.append("<|im_end|>")
+        lines.append("<|im_start|>user")
+        lines.append(user_prompt)
+        lines.append("<|im_end|>\n")
+        lines.append("<|im_start|>assistant\n")
+
+        return lines
+
 
 def select_function(model: Small_LLM_Model, functions: list, selection_prompt: str) -> str:
     names = []
