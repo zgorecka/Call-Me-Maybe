@@ -1,129 +1,42 @@
 from llm_sdk import Small_LLM_Model
 import numpy as np
+from src.models import Function
 
-func = [
-  {
-    "name": "fn_add_numbers",
-    "description": "Add two numbers together and return their sum.",
-    "parameters": {
-      "a": {
-        "type": "number"
-      },
-      "b": {
-        "type": "number"
-      }
-    },
-    "returns": {
-      "type": "number"
-    }
-  },
-  {
-    "name": "fn_greet",
-    "description": "Generate a greeting message for a person by name.",
-    "parameters": {
-      "name": {
-        "type": "string"
-      }
-    },
-    "returns": {
-      "type": "string"
-    }
-  },
-  {
-    "name": "fn_reverse_string",
-    "description": "Reverse a string and return the reversed result.",
-    "parameters": {
-      "s": {
-        "type": "string"
-      }
-    },
-    "returns": {
-      "type": "string"
-    }
-  },
-  {
-    "name": "fn_get_square_root",
-    "description": "Calculate the square root of a number.",
-    "parameters": {
-      "a": {
-        "type": "number"
-      }
-    },
-    "returns": {
-      "type": "number"
-    }
-  },
-  {
-    "name": "fn_substitute_string_with_regex",
-    "description": "Replace all occurrences matching a regex pattern in a string.",
-    "parameters": {
-      "source_string": {
-        "type": "string"
-      },
-      "regex": {
-        "type": "string"
-      },
-      "replacement": {
-        "type": "string"
-      }
-    },
-    "returns": {
-      "type": "string"
-    }
-  }
-]
 
-selection_prompt = (
-    "<|im_start|>system\n"
-    "Select the function that best matches the user request. "
-    "Return only the function name.\n"
-    "\n"
-    "Available functions:\n"
-    "Name: fn_add_numbers\n"
-    "Description: Add two numbers together.\n"
-    "\n"
-    "Name: fn_greet\n"
-    "Description: Generate a greeting.\n"
-    "<|im_end|>\n"
-    "<|im_start|>user\n"
-    "What is the sum of 2 and 3?\n"
-    "<|im_end|>\n"
-    "<|im_start|>assistant\n"
-)
-
-def build_selection_prompt(functions: list, user_prompt: str) -> str:
+def build_selection_prompt(functions: list[Function], user_prompt: str) -> str:
     lines = [
-        "<|im_start|>system",
-        "Select the function that best matches the user request.",
-        "Return only the exact function name.",
-        "Do not explain your choice.",
+        "<|im_start|>system\n",
+        "Select the function that best matches the user request.\n",
+        "Return only the exact function name.\n",
+        "Do not explain your choice.\n",
         "",
-        "Available functions:",
+        "Available functions:\n",
     ]
 
     for function in functions:
         lines.append("")
-        lines.append(f"Name: {function['name']}")
-        lines.append(f"Description: {function['description']}")
-        lines.append("Parameters:")
+        lines.append(f"Name: {function.name}\n")
+        lines.append(f"Description: {function.description}\n")
+        lines.append("Parameters:\n")
 
-        for param_name, param_data in function["parameters"].items():
+        for param_name, param_data in function.parameters.items():
             lines.append(
-                f"- {parame_name}: {param_data["type"]}"
+                f"- {param_name}: {param_data.type}\n"
             )
-        lines.append("<|im_end|>")
-        lines.append("<|im_start|>user")
-        lines.append(user_prompt)
-        lines.append("<|im_end|>\n")
-        lines.append("<|im_start|>assistant\n")
+    lines.append("<|im_end|>\n")
+    lines.append("<|im_start|>user\n")
+    lines.append(user_prompt)
+    lines.append("<|im_end|>\n")
+    lines.append("<|im_start|>assistant\n")
+        
+    res = "".join(lines)
+    return res
 
-        return lines
 
-
-def select_function(model: Small_LLM_Model, functions: list, selection_prompt: str) -> str:
+def select_function(model: Small_LLM_Model, functions: list[Function], selection_prompt: str) -> str:
     names = []
     for function in functions:
-        names.append(function["name"])
+        names.append(function.name)
     function_token_ids = []
     for name in names:
         function_token_ids.append(model.encode(name).tolist()[0])

@@ -19,7 +19,7 @@ def load_function_def(path: Path) -> list[Function]:
     functions_adapter = TypeAdapter(list[Function])
     try:
         functions = functions_adapter.validate_python(data)
-        return 
+        return functions
     except ValidationError as e:
         print(e)
 
