@@ -25,10 +25,10 @@ def load_function_def(path: Path) -> list[Function]:
 
 def load_prompt(path: Path) -> list[Prompt]:
     data = load_json(path)
-    functions_adapter = TypeAdapter(list[Prompt])
+    prompt_adapter = TypeAdapter(list[Prompt])
     try:
-        functions = functions_adapter.validate_python(data)
-        return data
+        prompts = prompt_adapter.validate_python(data)
+        return prompts
     except ValidationError as e:
         print(e)
 
