@@ -4,7 +4,7 @@ import argparse
 from src.llm import select_function, build_selection_prompt, build_parameter_prompt, extract_parameter
 from llm_sdk import Small_LLM_Model
 
-prompt = "Reverse the string 'hello'"
+prompt = "What is the sum of 2 and 3?"
 
 def parse_arguments() -> argparse.Namespace:
     pass
@@ -24,7 +24,7 @@ def main() -> None:
     #for prompt in prompts:
     #    selection_prompt = build_selection_prompt(fun, prompt.prompt)
     #    print(select_function(model, fun, selection_prompt))
-    param_prompt = build_parameter_prompt(fun[2], prompt)
+    param_prompt = build_parameter_prompt(fun[0], prompt)
     print(param_prompt)
     params = extract_parameter(model, fun[0], param_prompt)
 

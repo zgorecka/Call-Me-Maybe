@@ -32,8 +32,23 @@ def build_selection_prompt(functions: list[Function], user_prompt: str) -> str:
     res = "".join(lines)
     return res
 
-def is_number():
-    pass
+def is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def is_valid_prefix(text: str) -> bool:
+    if text.startswith("-"):
+        text = text[1:]
+    if text == "":
+            return True
+    elif text.count(".") > 1:
+        return False
+    for c in text:
+        if c.isdigit() or c == '.':
+            return False
 
 def build_parameter_prompt(function: Function, user_prompt: str) -> str:
     lines = [
@@ -45,7 +60,7 @@ def build_parameter_prompt(function: Function, user_prompt: str) -> str:
         "Selected function:\n",
     ]
 
-    lines.append(f"Name: {function.name}")
+    lines.append(f"Name: {function.name}\n")
     lines.append("Parameters in required order:\n")
 
     for param_name, param_data in function.parameters.items():
@@ -64,26 +79,32 @@ def build_parameter_prompt(function: Function, user_prompt: str) -> str:
 def extract_parameter(model: Small_LLM_Model, function:Function, parameter_prompt: str) -> str:
     input_ids = model.encode(parameter_prompt).tolist()[0]
     generated_ids = []
-    end_ids = model.encode("<|im_end|>").tolist()[0]
-    #print(end_ids)
-
+    genereted_param = []
     while True:
         next_token_id = model.get_logits_from_input_ids(input_ids + generated_ids)
-        next_token = np.argmax(next_token_id)
-        print(
-            "token:",
-            next_token,
-            "tekst:",
-            repr(model.decode(next_token))
-        )
-        generated_ids.append(next_token)
-        if generated_ids[-len(end_ids):] == end_ids:
-            break
-    result = ""
-    for id in generated_ids:
-        result += model.decode(id)
-    print(result)
-    return result
+        while True:
+            next_token = np.argmax(next_token_id)
+            next_token_text = model.decode(next_token)
+            currnet_text = ""
+            for id in generated_ids:
+                currnet_text += model.decode(id)
+            candidate_text = currnet_text + next_token_text
+            print("candidate: ", currnet_text)
+            if " " in next_token_text:
+                if is_number(currnet_text):
+                    print("currnet: ", currnet_text)
+                    return currnet_text
+                else:
+                    generated_ids.append(next_token)
+                    #next_token_id[next_token] = -np.inf
+                    break
+
+            if is_valid_prefix(candidate_text):
+                generated_ids.append(next_token)
+                genereted_param.append(next_token)
+                break
+
+            #next_token_id[next_token] = -np.inf
 
 
 def select_function(model: Small_LLM_Model, functions: list[Function], selection_prompt: str) -> str:
