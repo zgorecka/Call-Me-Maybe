@@ -47,22 +47,20 @@ def is_valid_prefix(text: str) -> bool:
     if not isinstance(text, str) or not text.isascii():
         return False
 
-    # Dozwolone początki liczby
     if text in ("", "-"):
         return True
 
     unsigned = text.removeprefix("-")
 
-    # Liczba nie może zaczynać się od kropki
     if not unsigned or unsigned.startswith("."):
         return False
 
-    # Maksymalnie jedna kropka
     if unsigned.count(".") > 1:
         return False
 
-    # Wyłącznie cyfry ASCII i kropka
     return all(char in "0123456789." for char in unsigned)
+
+
 def build_parameter_prompt(function: Function, user_prompt: str) -> str:
     lines = [
         "<|im_start|>system\n",
@@ -89,16 +87,71 @@ def build_parameter_prompt(function: Function, user_prompt: str) -> str:
     res = "".join(lines)
     return res
 
+
 def numeric_candidates(prompt: str) -> list[str]:
     words = prompt.split(" ")
     candidates = []
     for word in words:
+        cleaned_word = word.strip(',!?;:()[]{}"\'')
+        if cleaned_word.endswith(".") and cleaned_word[:-1].isdigit():
+            cleaned_word = cleaned_word[:-1]
         try:
-            candidates.append(float(word))
+            float(cleaned_word)
         except ValueError:
             continue
-    
+        candidates.append(str(float(cleaned_word)))
+    return candidates
 
+def select_parameters_num(model: Small_LLM_Model, functions: list[Function], user_prompt: str) -> str:
+    prompt_num = numeric_candidates(user_prompt)
+    print(prompt_num)
+    prompt_num = ['2', '3']
+    parameter_prompt = build_parameter_prompt(functions, user_prompt)
+
+    num_token_ids = []
+    for num in prompt_num:
+        num_token_ids.append(model.encode(num).tolist()[0])
+
+    input_ids = model.encode(parameter_prompt).tolist()[0]
+    generated_ids = []
+
+    for _ in range(2):
+        print("gen ids: ", generated_ids)
+        print("num tok: ", num_token_ids)
+        if generated_ids in num_token_ids:
+            input_ids += generated_ids
+            generated_ids = []
+
+        maching_seq = []
+        for seq in num_token_ids:
+            if generated_ids == seq[:len(generated_ids)]:
+                maching_seq.append(seq)
+
+        next_token_id = model.get_logits_from_input_ids(input_ids + generated_ids)
+
+        mask = np.full_like(
+            np.asarray(next_token_id),
+            -np.inf,
+            dtype=float,
+        )
+
+        pos = len(generated_ids)
+
+        allowed_ids =[]
+
+        for seq in maching_seq:
+            allowed_ids.append(seq[pos])
+
+        for id in allowed_ids:
+            mask[id] = next_token_id[id]
+
+        next_token = np.argmax(mask)
+        generated_ids.append(int(next_token))
+            
+        result = ""
+        for id in generated_ids:
+            result += model.decode(id)
+    return result
 
 def select_function(model: Small_LLM_Model, functions: list[Function], selection_prompt: str) -> str:
     names = []
