@@ -1,7 +1,7 @@
 from src.file_loader import load_function_def, load_prompt
 from pathlib import Path
 import argparse
-from src.llm import select_function, build_selection_prompt, build_parameter_prompt, select_parameters_num
+from src.llm import select_function, build_selection_prompt, build_parameter_prompt, select_parameters_num, select_parameters
 from llm_sdk import Small_LLM_Model
 
 prompt = "What is the sum of 2 and 3?"
@@ -24,9 +24,8 @@ def main() -> None:
     #for prompt in prompts:
     #    selection_prompt = build_selection_prompt(fun, prompt.prompt)
     #    print(select_function(model, fun, selection_prompt))
-    param_prompt = build_parameter_prompt(fun[0], prompt)
-    print(param_prompt)
-    params = select_parameters_num(model, fun[0], prompt)
+    #param_prompt = build_parameter_prompt(fun[0], prompt)
+    params = select_parameters(model, fun[0], prompt) #TODO do przetestowania !!!
     print("sdsdff ", params)
 
 if __name__ == "__main__":

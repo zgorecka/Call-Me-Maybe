@@ -61,7 +61,7 @@ def is_valid_prefix(text: str) -> bool:
     return all(char in "0123456789." for char in unsigned)
 
 
-def build_parameter_prompt(function: Function, user_prompt: str) -> str:
+def build_parameter_prompt2(function: Function, user_prompt: str) -> str:
     lines = [
         "<|im_start|>system\n",
         "Extract the parameter values required by the selected function.\n",
@@ -87,6 +87,24 @@ def build_parameter_prompt(function: Function, user_prompt: str) -> str:
     res = "".join(lines)
     return res
 
+def build_parameter_prompt(function: Function, user_prompt: str, params: dict, name) -> str:
+    lines = f"User request: {user_prompt}"
+
+    lines.append(f"Function: {function.name}\n")
+    lines.append(f"Current parameter:{name}\n")
+    lines.append(f"Expected type: {function.parameters[name]}")
+    arguments = "{"
+    for param_name, param_data in params.item():
+            arguments += f"\"{param_name}\": {param_data}, "
+    arguments += f"\"{name}\": "
+    lines.append(arguments)
+    lines.append("<|im_end|>\n")
+    lines.append("<|im_start|>assistant\n")
+
+    res = "".join(lines)
+    print(res)
+    return res
+
 
 def numeric_candidates(prompt: str) -> list[str]:
     words = prompt.split(" ")
@@ -99,15 +117,16 @@ def numeric_candidates(prompt: str) -> list[str]:
             float(cleaned_word)
         except ValueError:
             continue
-        candidates.append(str(float(cleaned_word)))
+        float_num = float(cleaned_word)
+        if float_num.is_integer():
+            candidates.append(str(int(cleaned_word)))
+        else:
+            candidates.append(str(float_num))
     return candidates
 
-def select_parameters_num(model: Small_LLM_Model, functions: list[Function], user_prompt: str) -> str:
+def select_parameters_num(model: Small_LLM_Model, function: Function, user_prompt: str, params: dict, name: str) -> str:
     prompt_num = numeric_candidates(user_prompt)
-    print(prompt_num)
-    prompt_num = ['2', '3']
-    parameter_prompt = build_parameter_prompt(functions, user_prompt)
-
+    parameter_prompt = build_parameter_prompt(function, user_prompt, params, name)
     num_token_ids = []
     for num in prompt_num:
         num_token_ids.append(model.encode(num).tolist()[0])
@@ -115,7 +134,7 @@ def select_parameters_num(model: Small_LLM_Model, functions: list[Function], use
     input_ids = model.encode(parameter_prompt).tolist()[0]
     generated_ids = []
 
-    for _ in range(2):
+    for _ in range():
         print("gen ids: ", generated_ids)
         print("num tok: ", num_token_ids)
         if generated_ids in num_token_ids:
@@ -151,7 +170,19 @@ def select_parameters_num(model: Small_LLM_Model, functions: list[Function], use
         result = ""
         for id in generated_ids:
             result += model.decode(id)
+            print("res: ", result)
     return result
+
+def select_parameters(model: Small_LLM_Model, function: Function, user_prompt: str) -> dict:
+    params = {}
+
+    for name, value_type in function.parameters.items():
+        match value_type:
+            case "number":
+                params[name] = select_parameters_num(model, function, user_prompt, params, name)
+
+    return params
+    
 
 def select_function(model: Small_LLM_Model, functions: list[Function], selection_prompt: str) -> str:
     names = []
