@@ -4,7 +4,7 @@ import argparse
 from src.llm import select_function, select_parameters
 from llm_sdk import Small_LLM_Model
 
-prompt = "Greet my mother shreek"
+prompt = "Replace all numbers in \"Hello 34 I'm 233 years old\" with NUMBERS"
 
 def parse_arguments() -> argparse.Namespace:
     pass

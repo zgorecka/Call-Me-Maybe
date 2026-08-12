@@ -61,10 +61,11 @@ def is_valid_prefix(text: str) -> bool:
     return all(char in "0123456789." for char in unsigned)
 
 
-def build_parameter_prompt_str(function: Function, user_prompt: str, params: dict, name) -> str:
-    lines = [
+def build_parameter_prompt_str(function: Function, user_prompt: str, params: dict, name: str) -> str:
+    lines2 = [
         "<|im_start|>system\n",
         "Extract the value of the current parameter required by the selected function.\n",
+        "Use the function description, user request, parameter name and previously selected arguments.\n",
         "Interpret the user's request. The value may need to be derived from its meaning and does not have to appear literally in the request.\n",
         "Return only its value.\n",
         "Do not add leading or trailing whitespace.\n",
@@ -72,8 +73,19 @@ def build_parameter_prompt_str(function: Function, user_prompt: str, params: dic
         "Selected function:\n",
     ]
 
+    lines = [
+                "<|im_start|>system\n",
+                "Extract the value of the current parameter required by the selected function.\n",
+                "Use the function description, user request, parameter name and previously selected arguments.\n",
+                "Use the user request and already selected arguments.\n",
+                "Do not include parameter names, explanations, or additional text.\n",
+                "Selected function:\n",
+            ]
+
     lines.append(f"Name: {function.name}\n")
-    lines.append("Current parameter {name}\n")
+    lines.append(f"Description: {function.description}\n")
+    
+    lines.append(f"Current parameter {name}\n")
     lines.append(f"Parameter type: {function.parameters[name].type}")
     lines. append("<|im_end|>\n")
     lines.append("<|im_start|>user\n")
