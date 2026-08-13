@@ -32,5 +32,10 @@ def load_prompt(path: Path) -> list[Prompt]:
     except ValidationError as e:
         print(e)
 
+def generete_json(results: list):
+    with open("data/output/function_calling_results.json", "w", encoding="utf-8") as file:
+        json.dump(results, file, indent=4, ensure_ascii=False)
+    
+
 if __name__ == "__main__":
     load_function_def('data/input/functions_definition1.json')

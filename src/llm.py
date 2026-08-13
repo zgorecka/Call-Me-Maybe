@@ -62,42 +62,40 @@ def is_valid_prefix(text: str) -> bool:
 
 
 def build_parameter_prompt_str(function: Function, user_prompt: str, params: dict, name: str) -> str:
-    lines2 = [
-        "<|im_start|>system\n",
-        "Extract the value of the current parameter required by the selected function.\n",
-        "Use the function description, user request, parameter name and previously selected arguments.\n",
-        "Interpret the user's request. The value may need to be derived from its meaning and does not have to appear literally in the request.\n",
-        "Return only its value.\n",
-        "Do not add leading or trailing whitespace.\n",
-        "End the response immediately after the value.\n",
-        "Selected function:\n",
-    ]
+    lines = (
+        "<|im_start|>system\n"
+        "Generate the value of the current parameter required by the selected function.\n"
+        "Use the function description, user request, parameter name and previously selected arguments.\n"
+        "Interpret the user's request. The value may need to be derived from its meaning and does not have to appear literally in the request.\n"
+        "Return only its value.\n"
+        "Do not add leading or trailing whitespace.\n"
+        "End the response immediately after the value.\n"
+        "Selected function:\n"
+        f"Name: {function.name}\n"
+        f"Description: {function.description}\n"
+        "Parameters in required order:\n"
+    )
 
-    lines = [
-                "<|im_start|>system\n",
-                "Extract the value of the current parameter required by the selected function.\n",
-                "Use the function description, user request, parameter name and previously selected arguments.\n",
-                "Use the user request and already selected arguments.\n",
-                "Do not include parameter names, explanations, or additional text.\n",
-                "Selected function:\n",
-            ]
+    for param_name, param_data in function.parameters.items():
+            lines += (
+                f"- {param_name}: {param_data.type}\n"
+            )
+    lines += (
+        f"Current parameter: {name}\n"
+        f"Parameter type: {function.parameters[name].type}\n"
+        "<|im_end|>\n"
+        "<|im_start|>user\n"
+        f"{user_prompt}"
+        "\n<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
 
-    lines.append(f"Name: {function.name}\n")
-    lines.append(f"Description: {function.description}\n")
-    
-    lines.append(f"Current parameter {name}\n")
-    lines.append(f"Parameter type: {function.parameters[name].type}")
-    lines. append("<|im_end|>\n")
-    lines.append("<|im_start|>user\n")
-    lines.append(user_prompt)
-    lines.append("\n<|im_end|>\n")
-    lines.append("<|im_start|>assistant\n")
-    arg = f""
+    arg = ""
     for param_name, param_data in params.items():
-                arg += f"{param_name}: {param_data}, "
+                arg += f"{param_name}: {param_data} "
 
     arg += f"{name}: "
-    lines.append(arg)
+    lines += (arg)
 
     res = "".join(lines)
     print(res)
@@ -106,7 +104,7 @@ def build_parameter_prompt_str(function: Function, user_prompt: str, params: dic
 def build_parameter_prompt(function: Function, user_prompt: str, params: dict, name) -> str:
     lines = [
             "<|im_start|>system\n",
-            "Extract the value of the current parameter required by the selected function.\n",
+            "Generate the value of the current parameter required to perform the selected function.\n",
             "Use the user request and already selected arguments.\n",
             "Do not include parameter names, explanations, or additional text.\n",
             "Selected function:\n",
@@ -132,7 +130,7 @@ def build_parameter_prompt(function: Function, user_prompt: str, params: dict, n
     lines.append(arg)
 
     res = "".join(lines)
-    print(res)
+    #print(res)
     return res
 
 def build_parameter_prompt2(function: Function, user_prompt: str, params: dict, name) -> str:
@@ -150,7 +148,7 @@ def build_parameter_prompt2(function: Function, user_prompt: str, params: dict, 
     lines.append("<|im_start|>assistant\n")
 
     res = "".join(lines)
-    print(res)
+    #print(res)
     return res
 
 
@@ -174,7 +172,7 @@ def numeric_candidates(prompt: str) -> list[str]:
 
 
 def select_parameters_str(model: Small_LLM_Model, function: Function, user_prompt: str, params: dict, name: str) -> str:
-    parameter_prompt = build_parameter_prompt(function, user_prompt, params, name) #TODO czemu ze build_str dodaje te kreski wtf
+    parameter_prompt = build_parameter_prompt_str(function, user_prompt, params, name) #TODO czemu ze build_str dodaje te kreski wtf
 
     input_ids = model.encode(parameter_prompt).tolist()[0]
     generated_ids = []
@@ -185,7 +183,7 @@ def select_parameters_str(model: Small_LLM_Model, function: Function, user_promp
 
         next_token = np.argmax(next_token_id)
         generated_ids.append(int(next_token))
-        print(model.decode(next_token))
+        #print(model.decode(next_token))
         result += model.decode(next_token)
 
     return result
@@ -193,7 +191,7 @@ def select_parameters_str(model: Small_LLM_Model, function: Function, user_promp
 
 def select_parameters_num(model: Small_LLM_Model, function: Function, user_prompt: str, params: dict, name: str) -> str:
     prompt_num = numeric_candidates(user_prompt)
-    print(f"can {name}", prompt_num)
+    #print(f"can {name}", prompt_num)
     parameter_prompt = build_parameter_prompt(function, user_prompt, params, name)
     num_token_ids = []
     for num in prompt_num:
