@@ -1,6 +1,13 @@
-from llm_sdk import Small_LLM_Model
+from llm_sdk.llm_sdk import Small_LLM_Model
 import numpy as np
 from src.models import Function
+import json
+
+_JSON_STRING_START_CACHE: dict[int, list[int]] = {}
+_TOKEN_IDS_CACHE: dict[
+    tuple[int, tuple[str, ...]],
+    list[list[int]],
+] = {}
 
 
 def build_selection_prompt(functions: list[Function], user_prompt: str) -> str:
@@ -66,51 +73,372 @@ def is_valid_prefix(text: str) -> bool:
     return all(char in "0123456789." for char in unsigned)
 
 
-def build_parameter_prompt_str2(
-        function: Function,
-        user_prompt: str,
-        params: dict,
-        name: str
-              ) -> str:
-    """Build a prompt for generating a parameter value as text."""
+def build_call_prompt(
+    functions: list[Function],
+    user_prompt: str,
+) -> str:
+    """Build one prompt for function and argument selection."""
 
     lines = (
-        "<|im_start|>system\n"
-        "Generate the value of the current parameter required by the"
-        "selected function.\nUse the function description and user request.\n"
-        "Also use the parameter name and previously selected arguments.\n"
-        "For a string parameter, preserve the complete value, including spaces,"
-        "punctuation and parentheses.\n"
-        "Return only its value with no extra whitespace.\nEnd response"
-        "immediately after the value.\n"
-        "Selected function:\n"
-        f"Name: {function.name}\n"
-        f"Description: {function.description}\n"
-        "Parameters in required order:\n"
+        "Select the best function and extract its arguments.\n"
+        "Do not execute the function.\n"
+        "Generate arguments that perform the complete user request.\n"
+        "Copy explicit values exactly.\n"
+        "A regex must match one requested occurrence at a time, so that "
+        "re.sub can replace every occurrence independently.\n"
+        "Do not use .* to connect separate occurrences unless the user "
+        "explicitly requests the entire span between them.\n"
+        "When a replacement is described as a symbol, return the literal "
+        "symbol, for example asterisk means *.\n"
+        "Return valid JSON.\n\n"
+        "Available functions:\n"
     )
 
-    for param_name, param_data in function.parameters.items():
-        lines += f"- {param_name}: {param_data.type}\n"
+    for function in functions:
+        lines += (
+            f"\nName: {function.name}\n"
+            f"Description: {function.description}\n"
+            "Parameters:\n"
+        )
+
+        for param_name, param_data in function.parameters.items():
+            lines += f"- {param_name}: {param_data.type}\n"
+
     lines += (
-        f"Current parameter: {name}\n"
-        f"Parameter type: {function.parameters[name].type}\n"
-        "<|im_end|>\n"
-        "<|im_start|>user\n"
-        f"{user_prompt}\n"
-        "<|im_end|>\n"
-        "<|im_start|>assistant\n"
+        "\nUser request:\n"
+        f"{user_prompt}\n\n"
+        "Output:\n"
+        "{"
+        f'"prompt": {json.dumps(user_prompt, ensure_ascii=False)}, '
+        '"name": "'
     )
 
-    arg = ""
-    for param_name, param_data in params.items():
-        arg += f"{param_name}: {param_data} "
+    return lines
 
-    arg += f"{name}: "
-    lines += arg
 
-    res = "".join(lines)
-    print(res)
-    return res
+def select_function_from_context(
+    model: Small_LLM_Model,
+    functions: list[Function],
+    context_ids: list[int],
+) -> tuple[Function, list[int]]:
+    """Select a function using constrained decoding."""
+
+    function_by_name = {
+        function.name: function
+        for function in functions
+    }
+
+    result, generated_ids = select_candidate_from_context(
+        model,
+        context_ids,
+        list(function_by_name),
+    )
+
+    return function_by_name[result], generated_ids
+
+
+def json_string_start_token_ids(
+    model: Small_LLM_Model,
+    vocab_size: int,
+) -> list[int]:
+    """Return token IDs that begin a JSON string."""
+
+    cache_key = id(model)
+
+    if cache_key in _JSON_STRING_START_CACHE:
+        return _JSON_STRING_START_CACHE[cache_key]
+
+    allowed_ids: list[int] = []
+
+    for token_id in range(vocab_size):
+        token_text = model.decode([token_id])
+
+        if token_text.lstrip().startswith('"'):
+            allowed_ids.append(token_id)
+
+    if not allowed_ids:
+        raise ValueError(
+            "Tokenizer does not contain a JSON string start token"
+        )
+
+    _JSON_STRING_START_CACHE[cache_key] = allowed_ids
+    return allowed_ids
+
+
+def extract_complete_json_string(
+    text: str,
+) -> str | None:
+    """Extract the first complete JSON string."""
+
+    text = text.lstrip()
+
+    if not text.startswith('"'):
+        return None
+
+    for index in range(1, len(text)):
+        if text[index] != '"':
+            continue
+
+        backslashes = 0
+        position = index - 1
+
+        while position >= 0 and text[position] == "\\":
+            backslashes += 1
+            position -= 1
+
+        if backslashes % 2 == 0:
+            return text[:index + 1]
+
+    return None
+
+
+def encode_candidates(
+    model: Small_LLM_Model,
+    candidates: list[str],
+) -> list[list[int]]:
+    """Encode candidate sequences once."""
+
+    key = (id(model), tuple(candidates))
+
+    if key not in _TOKEN_IDS_CACHE:
+        _TOKEN_IDS_CACHE[key] = [
+            model.encode(candidate).tolist()[0]
+            for candidate in candidates
+        ]
+
+    return _TOKEN_IDS_CACHE[key]
+
+
+def select_call(
+    model: Small_LLM_Model,
+    functions: list[Function],
+    user_prompt: str,
+) -> dict[str, object]:
+    prompt = build_call_prompt(functions, user_prompt)
+    context_ids = model.encode(prompt).tolist()[0]
+
+    function, function_ids = select_function_from_context(
+        model,
+        functions,
+        context_ids,
+    )
+
+    context_ids.extend(function_ids)
+    context_ids.extend(
+        model.encode('", "parameters": {').tolist()[0]
+    )
+
+    params: dict[str, str | int | float | bool] = {}
+    value: str | int | float | bool
+    value_ids: list[int]
+
+    parameter_items = list(function.parameters.items())
+
+    for index, (name, type_info) in enumerate(parameter_items):
+        if index > 0:
+            syntax = f', {json.dumps(name)}: '
+        else:
+            syntax = f'{json.dumps(name)}: '
+
+        context_ids.extend(model.encode(syntax).tolist()[0])
+
+        if type_info.type == "number":
+            value, value_ids = select_parameters_num(
+                model,
+                user_prompt,
+                context_ids,
+            )
+
+        elif type_info.type == "boolean":
+            value, value_ids = select_parameters_bool(
+                model,
+                context_ids,
+            )
+
+        elif type_info.type == "string":
+            value, value_ids = select_parameters_str(
+                model,
+                context_ids,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported parameter type: {type_info.type}"
+            )
+
+        params[name] = value
+        context_ids.extend(value_ids)
+
+    context_ids.extend(model.encode("}}").tolist()[0])
+
+    return {
+        "prompt": user_prompt,
+        "name": function.name,
+        "parameters": params,
+    }
+
+
+def select_candidate_from_context(
+    model: Small_LLM_Model,
+    context_ids: list[int],
+    candidates: list[str],
+) -> tuple[str, list[int]]:
+    """Select one candidate using constrained decoding."""
+
+    if not candidates:
+        raise ValueError("Candidate list cannot be empty")
+
+    candidate_token_ids = encode_candidates(
+        model,
+        candidates,
+    )
+
+    generated_ids: list[int] = []
+
+    while generated_ids not in candidate_token_ids:
+        matching_sequences = [
+            sequence
+            for sequence in candidate_token_ids
+            if generated_ids == sequence[:len(generated_ids)]
+        ]
+
+        if not matching_sequences:
+            raise ValueError(
+                "Generated tokens do not match any candidate"
+            )
+
+        position = len(generated_ids)
+
+        allowed_ids = {
+            sequence[position]
+            for sequence in matching_sequences
+            if position < len(sequence)
+        }
+
+        if not allowed_ids:
+            raise ValueError("No allowed next token")
+
+        if len(allowed_ids) == 1:
+            next_token = next(iter(allowed_ids))
+        else:
+            logits = model.get_logits_from_input_ids(
+                context_ids + generated_ids
+            )
+
+            next_token = max(
+                allowed_ids,
+                key=lambda token_id: logits[token_id],
+            )
+
+        generated_ids.append(next_token)
+
+    return model.decode(generated_ids), generated_ids
+
+
+def select_parameters_num(
+    model: Small_LLM_Model,
+    user_prompt: str,
+    context_ids: list[int],
+) -> tuple[int | float, list[int]]:
+    """Select a number from the user request."""
+
+    candidates = numeric_candidates(user_prompt)
+
+    if not candidates:
+        raise ValueError(
+            f"No numeric candidates found in: {user_prompt!r}"
+        )
+
+    result, generated_ids = select_candidate_from_context(
+        model,
+        context_ids,
+        candidates,
+    )
+
+    number = float(result)
+
+    if number.is_integer():
+        return int(number), generated_ids
+
+    return number, generated_ids
+
+
+def select_parameters_bool(
+    model: Small_LLM_Model,
+    context_ids: list[int],
+) -> tuple[bool, list[int]]:
+    """Select true or false using constrained decoding."""
+
+    result, generated_ids = select_candidate_from_context(
+        model,
+        context_ids,
+        ["true", "false"],
+    )
+
+    return result == "true", generated_ids
+
+
+def select_parameters_str(
+    model: Small_LLM_Model,
+    context_ids: list[int],
+    max_new_tokens: int = 100,
+) -> tuple[str, list[int]]:
+    """Generate one complete JSON string."""
+
+    generated_ids: list[int] = []
+
+    for position in range(max_new_tokens):
+        logits = model.get_logits_from_input_ids(
+            context_ids + generated_ids
+        )
+
+        if position == 0:
+            allowed_ids = json_string_start_token_ids(
+                model,
+                len(logits),
+            )
+
+            next_token = max(
+                allowed_ids,
+                key=lambda token_id: logits[token_id],
+            )
+
+        else:
+            next_token = int(np.argmax(logits))
+
+        generated_ids.append(next_token)
+
+        generated_text = model.decode(generated_ids)
+        json_string = extract_complete_json_string(
+            generated_text
+        )
+
+        if json_string is None:
+            continue
+
+        try:
+            value = json.loads(json_string)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                "Model generated an invalid JSON string: "
+                f"{json_string!r}"
+            ) from error
+
+        normalized_string = json.dumps(
+            value,
+            ensure_ascii=False,
+        )
+
+        normalized_ids = model.encode(
+            normalized_string
+        ).tolist()[0]
+
+        return value, normalized_ids
+
+    raise ValueError(
+        f"String was not finished after {max_new_tokens} tokens"
+    )
+
 
 def build_parameter_prompt_str(
     function: Function,
@@ -118,38 +446,34 @@ def build_parameter_prompt_str(
     params: dict[str, str | int | float | bool],
     name: str,
 ) -> str:
-    """Build a completion prompt for generating a string parameter."""
+    """Build a JSON-completion prompt for one string parameter."""
 
     lines = (
-        "Task: Generete or extract arguments needed to call the selected function.\n"
-        "Do not execute the function or calculate its result.\n"
-        "Generate the complete value of the current parameter.\n"
-        "Preserve all spaces, punctuation, quotes and parentheses "
-        "contained in the value.\n"
-        "Generate only the value after the equals sign.\n"
-        "Finish the value with a newline.\n\n"
-        "Selected function:\n"
-        f"{function.name}\n\n"
-        "Function description:\n"
-        f"{function.description}\n\n"
-        "Expected parameters:\n"
-    )
-
-    for param_name, param_data in function.parameters.items():
-        lines += f"{param_name} ({param_data.type})\n"
-
-    lines += (
-        "\nUser request:\n"
-        f"{user_prompt}\n\n"
-        "Parameters:\n"
+        "Extract arguments required to call the function.\n"
+        "Copy explicit values completely and exactly.\n"
+        "Generate machine-readable values when they must be derived.\n"
+        "For regex, use concise canonical syntax without unnecessary "
+        "capturing groups.\n"
+        "Use a character class to match any character from a set.\n"
+        "Use word boundaries when matching a complete word.\n"
+        "Return exactly one JSON string value.\n\n"
+        f"Function: {function.name}\n"
+        f"Description: {function.description}\n"
+        f"User request: {user_prompt}\n"
+        "Output: {"
+        f'"prompt": {json.dumps(user_prompt, ensure_ascii=False)}, '
+        f'"name": {json.dumps(function.name)}, '
+        '"parameters": {'
     )
 
     for param_name, param_value in params.items():
-        lines += f"{param_name}={param_value}\n"
+        lines += (
+            f"{json.dumps(param_name)}: "
+            f"{json.dumps(param_value, ensure_ascii=False)}, "
+        )
 
-    lines += f"{name}="
+    lines += f"{json.dumps(name)}: \""
 
-    print(lines)
     return lines
 
 
@@ -190,29 +514,6 @@ def build_parameter_prompt(
     return "".join(lines)
 
 
-def build_parameter_prompt2(
-        function: Function,
-        user_prompt: str,
-        params: dict, name
-        ) -> str:
-    """Alternative prompt format that serializes arguments inline."""
-
-    lines = ["User request: " + user_prompt + "\n"]
-
-    lines.append("Function: " + function.name + "\n")
-    lines.append("Current parameter: " + name + "\n")
-    lines.append("Expected type: " + str(function.parameters[name]) + "\n")
-    arguments = "Arguments: {"
-    for param_name, param_data in params.items():
-        arguments += f'"{param_name}": {param_data}, '
-    arguments += f'"{name}": '
-    lines.append(arguments)
-    lines.append("\n<|im_end|>\n")
-    lines.append("<|im_start|>assistant\n")
-
-    return "".join(lines)
-
-
 def numeric_candidates(prompt: str) -> list[str]:
     """Extract numeric candidate strings from text."""
 
@@ -232,287 +533,3 @@ def numeric_candidates(prompt: str) -> list[str]:
         else:
             candidates.append(str(float_num))
     return candidates
-
-
-def select_parameters_str(
-        model: Small_LLM_Model,
-        function: Function,
-        user_prompt: str,
-        params: dict,
-        name: str
-        ) -> str:
-    """Generate a string parameter value using the model."""
-
-    parameter_prompt = build_parameter_prompt_str(
-        function, user_prompt, params, name
-    )
-
-    input_ids = model.encode(parameter_prompt).tolist()[0]
-    generated_ids: list[float] = []
-    result = ""
-
-    while "\n" not in result:
-        next_token_id = model.get_logits_from_input_ids(
-            input_ids + generated_ids
-            )
-        next_token = np.argmax(next_token_id)
-        generated_ids.append(int(next_token))
-        result += model.decode(next_token)
-
-    return result
-
-
-def select_parameters_num(
-        model: Small_LLM_Model,
-        function: Function,
-        user_prompt: str,
-        params: dict,
-        name: str
-        ) -> str:
-    """Select a numeric parameter by matching generated token sequences."""
-
-    prompt_num = numeric_candidates(user_prompt)
-    parameter_prompt = build_parameter_prompt(
-        function, user_prompt, params, name
-        )
-    num_token_ids = []
-    for num in prompt_num:
-        num_token_ids.append(model.encode(num).tolist()[0])
-
-    input_ids = model.encode(parameter_prompt).tolist()[0]
-    generated_ids: list[float] = []
-
-    while generated_ids not in num_token_ids:
-        if generated_ids in num_token_ids:
-            break
-
-        maching_seq = []
-        for seq in num_token_ids:
-            if generated_ids == seq[:len(generated_ids)]:
-                maching_seq.append(seq)
-
-        next_token_id = model.get_logits_from_input_ids(
-            input_ids + generated_ids
-            )
-
-        mask = np.full_like(np.asarray(next_token_id), -np.inf, dtype=float)
-
-        pos = len(generated_ids)
-
-        allowed_ids = []
-
-        for seq in maching_seq:
-            allowed_ids.append(seq[pos])
-
-        for id_ in allowed_ids:
-            mask[id_] = next_token_id[id_]
-
-        next_token = np.argmax(mask)
-        generated_ids.append(int(next_token))
-
-    result = model.decode(generated_ids)
-    return result
-
-def select_parameters_bool(
-    model: Small_LLM_Model,
-    function: Function,
-    user_prompt: str,
-    params: dict[str, str | int | float | bool],
-    name: str,
-) -> bool:
-    """Select a boolean parameter using constrained decoding."""
-
-    candidates = ["true", "false"]
-
-    candidate_token_ids: list[list[int]] = [
-        model.encode(candidate).tolist()[0]
-        for candidate in candidates
-    ]
-
-    parameter_prompt = build_parameter_prompt(
-        function,
-        user_prompt,
-        params,
-        name,
-    )
-
-    input_ids: list[int] = model.encode(
-        parameter_prompt
-    ).tolist()[0]
-
-    generated_ids: list[int] = []
-
-    while generated_ids not in candidate_token_ids:
-        matching_sequences: list[list[int]] = []
-
-        for sequence in candidate_token_ids:
-            if generated_ids == sequence[:len(generated_ids)]:
-                matching_sequences.append(sequence)
-
-        if not matching_sequences:
-            raise ValueError(
-                f"Could not generate boolean parameter: {name}"
-            )
-
-        position = len(generated_ids)
-        allowed_ids: set[int] = set()
-
-        for sequence in matching_sequences:
-            if position < len(sequence):
-                allowed_ids.add(sequence[position])
-
-        logits = model.get_logits_from_input_ids(
-            input_ids + generated_ids
-        )
-
-        mask = np.full_like(
-            np.asarray(logits),
-            -np.inf,
-            dtype=float,
-        )
-
-        for token_id in allowed_ids:
-            mask[token_id] = logits[token_id]
-
-        next_token = int(np.argmax(mask))
-        generated_ids.append(next_token)
-
-    result = model.decode(generated_ids).strip().lower()
-
-    return result == "true"
-
-def select_parameters(
-        model: Small_LLM_Model,
-        function: Function,
-        user_prompt: str
-        ) -> dict:
-    """Pick values for all required parameters of a function."""
-
-    params: dict[str, str | int | float | bool] = {}
-
-    for name, value_type in function.parameters.items():
-        match value_type.type:
-            case "number":
-                params[name] = select_parameters_num(
-                    model, function, user_prompt, params, name
-                )
-                try:
-                    num = float(params[name])
-                    if num.is_integer():
-                        params[name] = int(num)
-                    else:
-                        params[name] = float(num)
-                except (ValueError, TypeError):
-                    continue
-            case "string":
-                params[name] = select_parameters_str(
-                    model, function, user_prompt, params, name
-                ).strip()
-            case "boolean":
-                params[name] = select_parameters_bool(
-                    model, function, user_prompt, params, name
-                )
-
-    return params
-
-
-def select_function(
-        model: Small_LLM_Model,
-        functions: list[Function],
-        user_prompt: str
-        ) -> Function:
-    """Ask the model to select the best function from a list."""
-
-    selection_prompt = build_selection_prompt(functions, user_prompt)
-    names = [function.name for function in functions]
-    function_token_ids = [model.encode(name).tolist()[0] for name in names]
-
-    input_ids = model.encode(selection_prompt).tolist()[0]
-
-    generated_ids: list[float] = []
-    while True:
-        if generated_ids in function_token_ids:
-            break
-        maching_seq = []
-        for seq in function_token_ids:
-            if generated_ids == seq[:len(generated_ids)]:
-                maching_seq.append(seq)
-
-        next_token_id = model.get_logits_from_input_ids(
-            input_ids + generated_ids
-            )
-
-        mask = np.full_like(np.asarray(next_token_id), -np.inf, dtype=float)
-        pos = len(generated_ids)
-        allowed_ids = []
-        for seq in maching_seq:
-            allowed_ids.append(seq[pos])
-        for id_ in allowed_ids:
-            mask[id_] = next_token_id[id_]
-        next_token = np.argmax(mask)
-        generated_ids.append(next_token)
-
-    result = "".join(model.decode(i) for i in generated_ids)
-
-    for function in functions:
-        if function.name == result:
-            return function
-    raise ValueError("Selected function name not found in provided list")
-
-
-def extract_parameter(
-        model: Small_LLM_Model,
-        function: Function,
-        parameter_prompt: str,
-        max_new_tokens: int = 20
-        ) -> str:
-    """Extract a numeric parameter token-by-token and return it as text."""
-
-    input_ids = model.encode(parameter_prompt).tolist()[0]
-    generated_ids: list[float] = []
-    for _ in range(max_new_tokens):
-        logits = model.get_logits_from_input_ids(input_ids + generated_ids)
-
-        for _ in range(len(logits)):
-            next_token = np.argmax(logits)
-            next_token_text = model.decode(next_token)
-
-            current_text = "".join(
-                model.decode(token_id) for token_id in generated_ids
-                ).lstrip()
-
-            if current_text == "":
-                next_token_text = next_token_text.lstrip()
-
-            if next_token_text == "":
-                logits[next_token] = -np.inf
-                continue
-
-            if any(char.isspace() for char in next_token_text):
-                parts = next_token_text.split(maxsplit=1)
-
-                if not parts:
-                    logits[next_token] = -np.inf
-                    continue
-                token_part = parts[0]
-                candidate_text = current_text + token_part
-                if is_number(candidate_text):
-                    return candidate_text
-                logits[next_token] = -np.inf
-                continue
-
-            candidate_text = current_text + next_token_text
-
-            if is_valid_prefix(candidate_text):
-                generated_ids.append(next_token)
-                break
-            logits[next_token] = -np.inf
-
-        else:
-            raise ValueError(
-                f"Model didn't find right token for: {current_text!r}"
-                )
-
-    raise ValueError(
-        f"Exceeded token limit ({max_new_tokens}) while extracting parameter"
-        )
