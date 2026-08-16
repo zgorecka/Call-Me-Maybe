@@ -1,11 +1,19 @@
-from src.file_loader import load_function_def, load_prompt, generete_json
+from src.file_loader import load_function_def, load_prompt, generate_json
 from pathlib import Path
 import argparse
 from src.llm import select_call
-from llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
+import sys
 
 
 def parse_arguments() -> argparse.Namespace:
+    """Parse command-line arguments for the project entry point.
+
+    Returns:
+        Parsed CLI arguments containing function definitions,
+        input prompts, and output destination paths.
+    """
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -31,25 +39,12 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def main() -> None:
-    # args = parse_arguments()
-    # results: list[dict[str, int | float | str | bool]] = []
-    # function_list = load_function_def(path=args.functions_definition)
-    # prompts = load_prompt(path=args.input)
-    # model = Small_LLM_Model()
+    """Run the function-calling pipeline for all input prompts.
 
-    # for prompt in prompts:
-    #     res = {}
-    #     selected_function = select_function(
-    #         model, function_list, prompt.prompt
-    #         )
-    #     params = select_parameters(model, selected_function, prompt.prompt)
-    #     res["prompt"] = prompt.prompt
-    #     res["name"] = selected_function.name
-    #     res["parameters"] = params
-    #     results.append(res)
-
-    # print(results)
-    # generete_json(results=results, path=args.output)
+    The function loads the available schema and prompt set, creates a model
+    instance, resolves the selected function calls for each prompt, and writes
+    the structured results to the output JSON file.
+    """
 
     args = parse_arguments()
 
@@ -73,11 +68,15 @@ def main() -> None:
 
         results.append(result)
 
-    generete_json(
+    generate_json(
         results=results,
         path=args.output,
     )
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ValueError, OSError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

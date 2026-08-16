@@ -1,4 +1,4 @@
-from llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
 import numpy as np
 from src.models import Function
 import json
@@ -10,74 +10,19 @@ _TOKEN_IDS_CACHE: dict[
 ] = {}
 
 
-def build_selection_prompt(functions: list[Function], user_prompt: str) -> str:
-    """Build a prompt to ask the model to select the best function."""
-
-    lines = [
-        "<|im_start|>system\n",
-        "Select the function that best matches the user request.\n",
-        "Return only the exact function name.\n",
-        "Do not explain your choice.\n",
-        "\n",
-        "Available functions:\n",
-    ]
-
-    for function in functions:
-        lines.append("\n")
-        lines.append("Name: " + function.name + "\n")
-        lines.append("Description: " + function.description + "\n")
-        lines.append("Parameters:\n")
-
-        for param_name, param_data in function.parameters.items():
-            lines.append(f"- {param_name}: {param_data.type}\n")
-
-    lines.append("<|im_end|>\n")
-    lines.append("<|im_start|>user\n")
-    lines.append(user_prompt)
-    lines.append("<|im_end|>\n")
-    lines.append("<|im_start|>assistant\n")
-
-    return "".join(lines)
-
-
-def is_number(text: str) -> bool:
-    """Return True if the text represents a finite number."""
-
-    if not isinstance(text, str) or not text.isascii():
-        return False
-
-    try:
-        value = float(text)
-        return np.isfinite(value)
-    except ValueError:
-        return False
-
-
-def is_valid_prefix(text: str) -> bool:
-    """Return True if the string can be a prefix of a number."""
-
-    if not isinstance(text, str) or not text.isascii():
-        return False
-
-    if text in ("", "-"):
-        return True
-
-    unsigned = text.removeprefix("-")
-
-    if not unsigned or unsigned.startswith("."):
-        return False
-
-    if unsigned.count(".") > 1:
-        return False
-
-    return all(char in "0123456789." for char in unsigned)
-
-
 def build_call_prompt(
     functions: list[Function],
     user_prompt: str,
 ) -> str:
-    """Build one prompt for function and argument selection."""
+    """Build the prompt used to select a function and extract its arguments.
+
+    Args:
+        functions: Available callable functions and their parameter schema.
+        user_prompt: Natural-language request from the user.
+
+    Returns:
+        A prompt instructing the model to return a valid JSON function call.
+    """
 
     lines = (
         "Select the best function and extract its arguments.\n"
@@ -121,7 +66,16 @@ def select_function_from_context(
     functions: list[Function],
     context_ids: list[int],
 ) -> tuple[Function, list[int]]:
-    """Select a function using constrained decoding."""
+    """Select the most relevant function using constrained decoding.
+
+    Args:
+        model: Local language model used for token generation.
+        functions: Available functions to choose from.
+        context_ids: Token ids of the prompt prefix before function selection.
+
+    Returns:
+        The selected function object and the generated token ids for it.
+    """
 
     function_by_name = {
         function.name: function
@@ -141,7 +95,19 @@ def json_string_start_token_ids(
     model: Small_LLM_Model,
     vocab_size: int,
 ) -> list[int]:
-    """Return token IDs that begin a JSON string."""
+    """Return token ids that can begin a JSON string literal.
+
+    Args:
+        model: The language model whose tokenizer vocabulary is inspected.
+        vocab_size: Number of tokens in the tokenizer vocabulary.
+
+    Returns:
+        Token ids whose decoded text begins with a double quote.
+
+    Raises:
+        ValueError: If no valid JSON string start token
+        exists in the vocabulary.
+    """
 
     cache_key = id(model)
 
@@ -168,7 +134,15 @@ def json_string_start_token_ids(
 def extract_complete_json_string(
     text: str,
 ) -> str | None:
-    """Extract the first complete JSON string."""
+    """Extract the first complete JSON string literal from text.
+
+    Args:
+        text: Decoded generated text that may contain a quoted JSON string.
+
+    Returns:
+        The substring representing a complete JSON string literal,
+        or None if no valid string literal is present yet.
+    """
 
     text = text.lstrip()
 
@@ -196,7 +170,15 @@ def encode_candidates(
     model: Small_LLM_Model,
     candidates: list[str],
 ) -> list[list[int]]:
-    """Encode candidate sequences once."""
+    """Tokenize all candidate strings once and cache the result.
+
+    Args:
+        model: Local language model used to tokenize candidate values.
+        candidates: Candidate strings for constrained decoding.
+
+    Returns:
+        A list of token-id sequences corresponding to the candidates.
+    """
 
     key = (id(model), tuple(candidates))
 
@@ -283,7 +265,21 @@ def select_candidate_from_context(
     context_ids: list[int],
     candidates: list[str],
 ) -> tuple[str, list[int]]:
-    """Select one candidate using constrained decoding."""
+    """Select a valid candidate from a constrained set.
+
+    Args:
+        model: Local language model used to score valid next tokens.
+        context_ids: Token ids already generated
+                    before the candidate selection.
+        candidates: Allowed decoding candidates.
+
+    Returns:
+        The decoded winning candidate and the token ids used to generate it.
+
+    Raises:
+        ValueError: If the candidate list is empty, no
+        valid continuation exists, or generation cannot match a valid prefix.
+    """
 
     if not candidates:
         raise ValueError("Candidate list cannot be empty")
@@ -340,7 +336,19 @@ def select_parameters_num(
     user_prompt: str,
     context_ids: list[int],
 ) -> tuple[int | float, list[int]]:
-    """Select a number from the user request."""
+    """Select a numeric value from the user request.
+
+    Args:
+        model: Local language model used for constrained numeric selection.
+        user_prompt: Prompt containing the natural-language query.
+        context_ids: Token ids for the current JSON output prefix.
+
+    Returns:
+        The selected integer or float and the generated token ids.
+
+    Raises:
+        ValueError: If no numeric candidate can be extracted from the prompt.
+    """
 
     candidates = numeric_candidates(user_prompt)
 
@@ -367,7 +375,15 @@ def select_parameters_bool(
     model: Small_LLM_Model,
     context_ids: list[int],
 ) -> tuple[bool, list[int]]:
-    """Select true or false using constrained decoding."""
+    """Select a boolean value using constrained decoding.
+
+    Args:
+        model: Local language model used to choose between the valid values.
+        context_ids: Token ids for the current JSON output prefix.
+
+    Returns:
+        The selected boolean and the generated token ids.
+    """
 
     result, generated_ids = select_candidate_from_context(
         model,
@@ -383,9 +399,24 @@ def select_parameters_str(
     context_ids: list[int],
     max_new_tokens: int = 100,
 ) -> tuple[str, list[int]]:
-    """Generate one complete JSON string."""
+    """Generate a complete JSON string value for a function parameter.
+
+    Args:
+        model: Local language model used to generate the string literal.
+        context_ids: Token ids for the current JSON output prefix.
+        max_new_tokens: Maximum number of generated tokens to attempt.
+
+    Returns:
+        The parsed string value and the token ids used to generate it.
+
+    Raises:
+        ValueError: If a valid JSON string cannot be generated within the token
+            budget.
+    """
 
     generated_ids: list[int] = []
+    if max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be greater than zero")
 
     for position in range(max_new_tokens):
         logits = model.get_logits_from_input_ids(
@@ -424,6 +455,11 @@ def select_parameters_str(
                 f"{json_string!r}"
             ) from error
 
+        if not isinstance(value, str):
+            raise ValueError(
+                f"Generated JSON value is not a string: {value!r}"
+            )
+
         normalized_string = json.dumps(
             value,
             ensure_ascii=False,
@@ -440,82 +476,16 @@ def select_parameters_str(
     )
 
 
-def build_parameter_prompt_str(
-    function: Function,
-    user_prompt: str,
-    params: dict[str, str | int | float | bool],
-    name: str,
-) -> str:
-    """Build a JSON-completion prompt for one string parameter."""
-
-    lines = (
-        "Extract arguments required to call the function.\n"
-        "Copy explicit values completely and exactly.\n"
-        "Generate machine-readable values when they must be derived.\n"
-        "For regex, use concise canonical syntax without unnecessary "
-        "capturing groups.\n"
-        "Use a character class to match any character from a set.\n"
-        "Use word boundaries when matching a complete word.\n"
-        "Return exactly one JSON string value.\n\n"
-        f"Function: {function.name}\n"
-        f"Description: {function.description}\n"
-        f"User request: {user_prompt}\n"
-        "Output: {"
-        f'"prompt": {json.dumps(user_prompt, ensure_ascii=False)}, '
-        f'"name": {json.dumps(function.name)}, '
-        '"parameters": {'
-    )
-
-    for param_name, param_value in params.items():
-        lines += (
-            f"{json.dumps(param_name)}: "
-            f"{json.dumps(param_value, ensure_ascii=False)}, "
-        )
-
-    lines += f"{json.dumps(name)}: \""
-
-    return lines
-
-
-def build_parameter_prompt(
-        function: Function,
-        user_prompt: str,
-        params: dict, name
-        ) -> str:
-    """Build a simplified prompt for generating a parameter value."""
-
-    lines = [
-        "<|im_start|>system\n",
-        "Generate the value of the current parameter required to perform\n",
-        "the selected function. Use the user request and already selected\n",
-        "arguments. Do not include parameter names or extra text.\n",
-        "Selected function:\n",
-    ]
-
-    lines.append("Name: " + function.name + "\n")
-    lines.append("Parameters in required order:\n")
-
-    for param_name, param_data in function.parameters.items():
-        lines.append(f"- {param_name}: {param_data.type}\n")
-
-    lines.append("<|im_end|>\n")
-    lines.append("<|im_start|>user\n")
-    lines.append(user_prompt)
-    lines.append("\n<|im_end|>\n")
-    lines.append("<|im_start|>assistant\n")
-
-    arg = ""
-    for param_name, param_data in params.items():
-        arg += f"{param_name}: {param_data}, "
-
-    arg += f"{name}: "
-    lines.append(arg)
-
-    return "".join(lines)
-
-
 def numeric_candidates(prompt: str) -> list[str]:
-    """Extract numeric candidate strings from text."""
+    """Extract numeric candidate strings from a prompt.
+
+    Args:
+        prompt: Natural-language text containing numeric values.
+
+    Returns:
+        A list of numeric strings found in the input, preserving integer and
+        floating-point forms when present.
+    """
 
     words = prompt.split(" ")
     candidates = []
@@ -529,7 +499,7 @@ def numeric_candidates(prompt: str) -> list[str]:
             continue
         float_num = float(cleaned_word)
         if float_num.is_integer():
-            candidates.append(str(int(cleaned_word)))
+            candidates.append(str(int(float_num)))
         else:
             candidates.append(str(float_num))
     return candidates
